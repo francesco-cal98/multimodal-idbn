@@ -1,0 +1,55 @@
+dataset:
+  path: "/home/student/Desktop/Groundeep/stimuli_dataset_10_10"
+  name: "stimuli_dataset.npz"
+  batch_size: 128
+  num_workers: 1
+  multimodal_flag: true
+
+model:
+  image_layers: [10000, 1500, 500]   # se carichi un pretrained con top=500, il joint si adatta
+  joint_hidden: 500
+  num_labels: 32
+
+training:
+  # Unimodali (immagine)
+  learning_rate: 0.1
+  weight_penalty: 0.0001
+  init_momentum: 0.5
+  final_momentum: 0.95
+  learning_rate_dynamic: true
+  cd: 10
+  epochs_image: 100
+
+  # Joint (semplice)
+  joint_learning_rate: 0.04  # Torna al valore originale (funzionava meglio)
+  joint_cd: 5
+  epochs_joint: 150  # Compromesso tra 100 e 200
+
+  # Cross-modality (sampling length)
+  cross_gibbs_steps: 50  # Compromesso tra 20 e 72 - critico per metriche!
+
+  # Aux clamped-CD (on/off)
+  use_aux: true
+  JOINT_AUX_COND_STEPS: 30  # Compromesso tra 10 e 50
+  JOINT_AUX_EVERY_K: 15
+
+  # Logging
+  log_every: 5
+  log_every_pca: 25
+  log_every_probe: 10
+
+paths:
+  save_dir: "/home/student/Desktop/Groundeep/networks/uniform/imdbn"
+  save_name: "imdbn_trained_uniform"
+
+  # opzionale: iDBN visiva pre-allenata
+  image_idbn_pretrained: "/home/student/Desktop/Groundeep/networks/uniform/dataset_10_10/uniform_i_/dbn_trained_uniform_1500_1500.pkl"
+
+  # opzionale: micro fine-tuning SOLO ultima RBM immagine (0 = disattivo)
+  image_idbn_finetune_last_epochs: 0
+
+wandb:
+  enable: true
+  project: "groundeep-diagnostics-multimodal"
+  entity: null
+  run_name: null
