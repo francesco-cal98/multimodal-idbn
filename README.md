@@ -15,8 +15,8 @@ A PyTorch implementation of multimodal Deep Belief Networks for learning joint r
 
 ```bash
 # Clone the repository
-git clone https://github.com/YOUR_USERNAME/multimodal-dbn.git
-cd multimodal-dbn
+git clone https://github.com/francesco-cal98/multimodal-idbn.git
+cd multimodal-idbn
 
 # Install dependencies
 pip install -r requirements.txt
@@ -229,10 +229,10 @@ If you use this code in your research, please cite:
 
 ```bibtex
 @software{multimodal_dbn,
-  author = {Your Name},
+  author = {Francesco Maria Calistroni},
   title = {Multimodal Deep Belief Networks},
   year = {2024},
-  url = {https://github.com/YOUR_USERNAME/multimodal-dbn}
+  url = {https://github.com/francesco-cal98/multimodal-idbn}
 }
 ```
 
