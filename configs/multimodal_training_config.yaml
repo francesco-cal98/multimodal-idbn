@@ -33,11 +33,6 @@ training:
   JOINT_AUX_COND_STEPS: 30  # Compromesso tra 10 e 50
   JOINT_AUX_EVERY_K: 15
 
-  # Logging
-  log_every: 5
-  log_every_pca: 25
-  log_every_probe: 10
-
 paths:
   save_dir: "/home/student/Desktop/Groundeep/networks/uniform/imdbn"
   save_name: "imdbn_trained_uniform"
@@ -53,3 +48,90 @@ wandb:
   project: "groundeep-diagnostics-multimodal"
   entity: null
   run_name: null
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# Customize which analyses and visualizations are performed during training
+# ============================================================================
+logging:
+  # Frequency settings (epochs)
+  log_every: 5                    # General snapshots frequency
+  log_every_pca: 25               # PCA embeddings frequency
+  log_every_probe: 10             # Linear probes frequency
+  log_every_energy: 50            # Energy diagnostics frequency
+  log_every_trajectory: 50        # Latent trajectory visualization frequency
+  log_every_neighbors: 50         # Nearest neighbors analysis frequency
+  log_every_convergence: 25       # Cross-modal convergence analysis frequency
+
+  # ---- BASIC METRICS ----
+  basic:
+    cd_loss: true                 # Contrastive divergence loss
+    cross_modal_accuracy: true    # Top-1 and Top-3 accuracy for IMG→TXT
+    cross_modal_ce: true          # Cross-entropy for label prediction
+    cross_modal_mse: true         # Image reconstruction MSE
+
+  # ---- SNAPSHOTS ----
+  snapshots:
+    enable: true
+    reconstruction_grid: true     # GT vs reconstructed images grid
+    confusion_matrix: true        # Predicted vs ground truth labels
+    topk_probabilities: true      # Top-K label probability table
+    num_samples: 8                # Number of validation samples to show
+
+  # ---- PCA EMBEDDINGS ----
+  pca:
+    enable: true
+    plot_2d: true                 # 2D PCA scatter plots
+    plot_3d: true                 # 3D PCA scatter plots
+    compute_correlations: true    # Spearman correlations with features
+
+  # ---- LINEAR PROBES ----
+  probes:
+    enable: true
+    n_bins: 5                     # Number of bins for continuous features
+    test_size: 0.2                # Train/test split ratio
+    max_steps: 1000               # Max training steps for probe
+    lr: 0.01                      # Probe learning rate
+    patience: 20                  # Early stopping patience
+    save_csv: false               # Save confusion matrices to CSV
+    # Features to probe (all enabled by default)
+    probe_cumulative_area: true
+    probe_convex_hull: true
+    probe_labels: true
+    probe_density: true           # Only if dataset has density
+
+  # ---- ENERGY DIAGNOSTICS ----
+  energy:
+    enable: false                 # Set to true to enable
+    track_free_energy: true       # Track RBM free energy
+    class_energies: true          # Per-class energy analysis
+    fixed_case_tracking: true     # Track specific samples across epochs
+    num_fixed_cases: 4            # Number of fixed samples to track
+
+  # ---- LATENT TRAJECTORY ----
+  trajectory:
+    enable: false                 # Set to true to enable
+    plot_2d: true                 # 2D trajectory visualization
+    plot_3d: true                 # 3D trajectory with reconstruction panel
+    num_samples: 4                # Number of trajectory samples
+    # Panel visualization settings
+    panel_size: [6, 6]            # Figure size
+    colormap: "viridis"           # Colormap for trajectory
+
+  # ---- NEAREST NEIGHBORS ----
+  neighbors:
+    enable: false                 # Set to true to enable
+    k: 5                          # Number of neighbors to find
+    similarity_metric: "cosine"   # Options: cosine, l2, inner_product
+    show_images: true             # Display neighbor images
+    deduplicate: true             # Remove duplicate neighbors
+
+  # ---- CROSS-MODAL CONVERGENCE ----
+  convergence:
+    enable: false                 # Set to true to enable
+    trace_img2txt: true           # IMG→TXT convergence tracing
+    trace_txt2img: true           # TXT→IMG convergence tracing
+    num_steps: 50                 # Steps for convergence analysis
+    panel_analysis: true          # Panel-level statistics
+    z_mismatch_check: true        # Check alignment between z_img and z_y
+    num_panel_samples: 16         # Samples for panel analysis

@@ -593,6 +593,7 @@ class iMDBN(nn.Module):
         embedding_dim: int = 64,
         wandb_run=None,
         logging_config_path: Optional[str] = None,
+        logging_cfg: Optional[dict] = None,
     ):
         super().__init__()
 
@@ -613,19 +614,23 @@ class iMDBN(nn.Module):
         self.dataloader = dataloader
         self.val_loader = val_loader
         self.wandb_run = wandb_run
-        # logging config (optional)
-        self.logging_cfg = {}
-        try:
-            import yaml
-            from pathlib import Path
-            cfg_path = Path(logging_config_path) if logging_config_path else Path("src/configs/logging_config.yaml")
-            if cfg_path.exists():
-                with cfg_path.open("r") as f:
-                    cfg = yaml.safe_load(f)
-                if isinstance(cfg, dict):
-                    self.logging_cfg = cfg
-        except Exception:
-            pass
+
+        # logging config - prefer passed dict, fallback to file
+        if logging_cfg is not None:
+            self.logging_cfg = logging_cfg
+        else:
+            self.logging_cfg = {}
+            try:
+                import yaml
+                from pathlib import Path
+                cfg_path = Path(logging_config_path) if logging_config_path else Path("configs/logging_config.yaml")
+                if cfg_path.exists():
+                    with cfg_path.open("r") as f:
+                        cfg = yaml.safe_load(f)
+                    if isinstance(cfg, dict):
+                        self.logging_cfg = cfg
+            except Exception:
+                pass
         self.num_labels = int(num_labels)
 
         # snapshot val
@@ -682,6 +687,16 @@ class iMDBN(nn.Module):
             pass
 
         self.arch_str = f"IMG{'-'.join(map(str,layer_sizes_img))}_JOINT{joint_layer_size}"
+
+    def _get_log_cfg(self, *keys, default=None):
+        """Helper to get nested logging config values."""
+        cfg = self.logging_cfg
+        for key in keys:
+            if isinstance(cfg, dict):
+                cfg = cfg.get(key, default)
+            else:
+                return default
+        return cfg if cfg is not None else default
 
     def _build_joint(self, Dz_img: int, joint_hidden: int):
         self.Dz_img = int(Dz_img)  # sempre presente
@@ -998,24 +1013,33 @@ class iMDBN(nn.Module):
                     totals["mse_sum"] += float(mse.item())
                     totals["npix"] = npix
 
-            if self.wandb_run and cd_losses:
+            # ---- BASIC METRICS (configurable) ----
+            basic_cfg = self.logging_cfg.get("basic", {})
+            if self.wandb_run and cd_losses and basic_cfg.get("cd_loss", True):
                 self.wandb_run.log({"joint/cd_loss": float(np.mean(cd_losses)), "epoch": epoch})
+
             if self.wandb_run and totals["n"] > 0:
                 top1 = totals["top1"] / totals["n"]
                 top3 = totals["top3"] / totals["n"]
                 ce_mean = totals["ce_sum"] / totals["n"]
                 mse_mean = totals["mse_sum"] / max(1, totals["n"] * max(1, totals["npix"] or 1))
-                self.wandb_run.log({
-                    "cross_modality/text_top1": top1,
-                    "cross_modality/text_top3": top3,
-                    "cross_modality/text_ce": ce_mean,
-                    "cross_modality/image_mse": mse_mean,
-                    "epoch": epoch
-                })
+                metrics = {"epoch": epoch}
+                if basic_cfg.get("cross_modal_accuracy", True):
+                    metrics["cross_modality/text_top1"] = top1
+                    metrics["cross_modality/text_top3"] = top3
+                if basic_cfg.get("cross_modal_ce", True):
+                    metrics["cross_modality/text_ce"] = ce_mean
+                if basic_cfg.get("cross_modal_mse", True):
+                    metrics["cross_modality/image_mse"] = mse_mean
+                if len(metrics) > 1:
+                    self.wandb_run.log(metrics)
 
-            # logging visuale/sonde come già avevi
+            # ---- VISUAL LOGGING (configurable) ----
             if self.wandb_run and self.val_loader is not None and self.features is not None:
-                if epoch % log_every_pca == 0:
+
+                # PCA embeddings
+                pca_cfg = self.logging_cfg.get("pca", {})
+                if pca_cfg.get("enable", True) and epoch % log_every_pca == 0:
                     try:
                         E, feats = compute_joint_embeddings_and_features(self)
                         if E.numel() > 0:
@@ -1028,13 +1052,14 @@ class iMDBN(nn.Module):
                             if "density" in feats:
                                 feat_map["Density"] = feats["density"].numpy()
                             if emb_np.shape[0] > 2 and emb_np.shape[1] > 2:
-                                p2 = PCA(n_components=2).fit_transform(emb_np)
-                                plot_2d_embedding_and_correlations(
-                                    emb_2d=p2, features=feat_map,
-                                    arch_name="Joint_top", dist_name="val",
-                                    method_name="pca", wandb_run=self.wandb_run,
-                                )
-                                if emb_np.shape[1] >= 3:
+                                if pca_cfg.get("plot_2d", True):
+                                    p2 = PCA(n_components=2).fit_transform(emb_np)
+                                    plot_2d_embedding_and_correlations(
+                                        emb_2d=p2, features=feat_map,
+                                        arch_name="Joint_top", dist_name="val",
+                                        method_name="pca", wandb_run=self.wandb_run,
+                                    )
+                                if pca_cfg.get("plot_3d", True) and emb_np.shape[1] >= 3:
                                     p3 = PCA(n_components=3).fit_transform(emb_np)
                                     plot_3d_embedding_and_correlations(
                                         emb_3d=p3, features=feat_map,
@@ -1044,39 +1069,81 @@ class iMDBN(nn.Module):
                     except Exception as e:
                         self.wandb_run.log({"warn/joint_pca_error": str(e)})
 
-                if epoch % log_every_probe == 0:
+                # Linear probes
+                probes_cfg = self.logging_cfg.get("probes", {})
+                if probes_cfg.get("enable", True) and epoch % log_every_probe == 0:
                     try:
                         log_joint_linear_probe(
                             self,
                             epoch=epoch,
-                            n_bins=5, test_size=0.2,
-                            steps=1000, lr=1e-2, patience=20, min_delta=0.0,
+                            n_bins=probes_cfg.get("n_bins", 5),
+                            test_size=probes_cfg.get("test_size", 0.2),
+                            steps=probes_cfg.get("max_steps", 1000),
+                            lr=probes_cfg.get("lr", 1e-2),
+                            patience=probes_cfg.get("patience", 20),
+                            min_delta=0.0,
+                            save_csv=probes_cfg.get("save_csv", False),
                             metric_prefix="joint",
                         )
                     except Exception as e:
                         self.wandb_run.log({"warn/joint_probe_error": str(e)})
 
-                if epoch % 5 == 0:
-                    run_and_log_cross_fixed_case(self, epoch=epoch, target_label=29,
-                                                max_steps=self.cross_steps, sample_h=False, sample_v=False,
-                                                tag="fixed_lbl12")
-                    run_and_log_z_mismatch_check(self, epoch=epoch, max_steps=self.cross_steps, sample_h=False, sample_v=False, tag="val")
-                    sample_idx = _imdbn_find_first_val_index_with_label(self, 2)
-                    _imdbn_log_vecdb_neighbors_for_traj(self, sample_idx=sample_idx, steps=self.cross_steps,
-                                                        k=8, metric="cosine", tag="vecdb",
-                                                        also_l2=True, dedup="image", exclude_self=True)
+                # Convergence analysis
+                convergence_cfg = self.logging_cfg.get("convergence", {})
+                log_every_convergence = self.logging_cfg.get("log_every_convergence", 25)
+                if convergence_cfg.get("enable", False) and epoch % log_every_convergence == 0:
+                    try:
+                        run_and_log_cross_fixed_case(self, epoch=epoch, target_label=29,
+                                                    max_steps=self.cross_steps, sample_h=False, sample_v=False,
+                                                    tag="fixed_lbl12")
+                        if convergence_cfg.get("z_mismatch_check", True):
+                            run_and_log_z_mismatch_check(self, epoch=epoch, max_steps=self.cross_steps,
+                                                        sample_h=False, sample_v=False, tag="val")
+                        if convergence_cfg.get("panel_analysis", True):
+                            run_and_log_cross_panel(self, epoch=epoch,
+                                                    per_class=convergence_cfg.get("num_panel_samples", 16) // self.num_labels or 1,
+                                                    max_steps=self.cross_steps,
+                                                    sample_h=False, sample_v=False, tag="panel")
+                    except Exception as e:
+                        self.wandb_run.log({"warn/convergence_error": str(e)})
 
-                if epoch % 10 == 0:
-                    run_and_log_cross_panel(self, epoch=epoch, per_class=4, max_steps=self.cross_steps,
-                                            sample_h=False, sample_v=False, tag="panel_4_per_class")
-                    idx4 = _imdbn_find_first_val_index_with_label(self, 4)
-                    if idx4 >= 0:
-                        from imdbn.utils.imdbn_logging import log_pca3_trajectory_with_recon_panel as _imdbn_log_pca3_traj_panel
-                        _imdbn_log_pca3_traj_panel(self, sample_idx=idx4, steps=self.cross_steps, tag="pca3_lbl4")
-                    _imdbn_log_latent_trajectory_with_recon_panel(self, sample_idx=idx4, steps=self.cross_steps, tag="sanity_pca_traj")
+                # Neighbors analysis
+                neighbors_cfg = self.logging_cfg.get("neighbors", {})
+                log_every_neighbors = self.logging_cfg.get("log_every_neighbors", 50)
+                if neighbors_cfg.get("enable", False) and epoch % log_every_neighbors == 0:
+                    try:
+                        sample_idx = _imdbn_find_first_val_index_with_label(self, 2)
+                        _imdbn_log_vecdb_neighbors_for_traj(
+                            self, sample_idx=sample_idx, steps=self.cross_steps,
+                            k=neighbors_cfg.get("k", 5),
+                            metric=neighbors_cfg.get("similarity_metric", "cosine"),
+                            tag="vecdb",
+                            also_l2=(neighbors_cfg.get("similarity_metric", "cosine") != "l2"),
+                            dedup="image" if neighbors_cfg.get("deduplicate", True) else None,
+                            exclude_self=True
+                        )
+                    except Exception as e:
+                        self.wandb_run.log({"warn/neighbors_error": str(e)})
 
-            if epoch % max(1, int(log_every)) == 0:
-                self._log_snapshots(epoch)
+                # Trajectory visualization
+                trajectory_cfg = self.logging_cfg.get("trajectory", {})
+                log_every_trajectory = self.logging_cfg.get("log_every_trajectory", 50)
+                if trajectory_cfg.get("enable", False) and epoch % log_every_trajectory == 0:
+                    try:
+                        idx = _imdbn_find_first_val_index_with_label(self, 4)
+                        if idx >= 0:
+                            if trajectory_cfg.get("plot_3d", True):
+                                from imdbn.utils.imdbn_logging import log_pca3_trajectory_with_recon_panel as _imdbn_log_pca3_traj_panel
+                                _imdbn_log_pca3_traj_panel(self, sample_idx=idx, steps=self.cross_steps, tag="pca3_traj")
+                            if trajectory_cfg.get("plot_2d", True):
+                                _imdbn_log_latent_trajectory_with_recon_panel(self, sample_idx=idx, steps=self.cross_steps, tag="pca2_traj")
+                    except Exception as e:
+                        self.wandb_run.log({"warn/trajectory_error": str(e)})
+
+            # Snapshots
+            snapshots_cfg = self.logging_cfg.get("snapshots", {})
+            if snapshots_cfg.get("enable", True) and epoch % max(1, int(log_every)) == 0:
+                self._log_snapshots(epoch, num=snapshots_cfg.get("num_samples", 8))
                 _imdbn_log_joint_auto_recon(self, epoch)
 
         print("[iMDBN] joint training finished.")

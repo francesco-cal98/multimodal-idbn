@@ -7,7 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from imdbn.models.imdbn import iMDBN
+from imdbn.models import iMDBN
 from imdbn.datasets.uniform_dataset import create_dataloaders_uniform
 
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "multimodal_training_config.yaml"
@@ -48,10 +48,21 @@ def build_params(cfg: dict) -> dict:
         "USE_AUX": t.get("use_aux", True),
         "JOINT_AUX_COND_STEPS": t.get("JOINT_AUX_COND_STEPS", t.get("aux_cond_steps", 50)),
         "JOINT_AUX_EVERY_K": t.get("JOINT_AUX_EVERY_K", 10),
-        # logging
-        "LOG_EVERY": t.get("log_every", 5),
-        "LOG_EVERY_PCA": t.get("log_every_pca", 25),
-        "LOG_EVERY_PROBE": t.get("log_every_probe", 10),
+    }
+
+
+def build_logging_params(cfg: dict) -> dict:
+    """Extract logging parameters from config."""
+    log_cfg = cfg.get("logging", {})
+    return {
+        # Frequencies
+        "LOG_EVERY": log_cfg.get("log_every", 5),
+        "LOG_EVERY_PCA": log_cfg.get("log_every_pca", 25),
+        "LOG_EVERY_PROBE": log_cfg.get("log_every_probe", 10),
+        "LOG_EVERY_ENERGY": log_cfg.get("log_every_energy", 50),
+        "LOG_EVERY_TRAJECTORY": log_cfg.get("log_every_trajectory", 50),
+        "LOG_EVERY_NEIGHBORS": log_cfg.get("log_every_neighbors", 50),
+        "LOG_EVERY_CONVERGENCE": log_cfg.get("log_every_convergence", 25),
     }
 
 
@@ -78,6 +89,8 @@ def main():
     dataset = cfg.get("dataset", {})
     model = cfg.get("model", {})
     params = build_params(cfg)
+    log_params = build_logging_params(cfg)
+    logging_cfg = cfg.get("logging", {})
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_loader, val_loader, _ = create_dataloaders_uniform(
@@ -103,6 +116,7 @@ def main():
         device=device,
         num_labels=model.get("num_labels", 32),
         wandb_run=wandb_run,
+        logging_cfg=logging_cfg,
     )
 
     # 1) iDBN visiva: carica se disponibile, altrimenti allena
@@ -112,13 +126,13 @@ def main():
         if not ok:
             print("[main] fallback: training image iDBN da zero...")
             imdbn.image_idbn.train(params["EPOCHS_IMG"],
-                                   log_every_pca=params["LOG_EVERY_PCA"],
-                                   log_every_probe=params["LOG_EVERY_PROBE"])
+                                   log_every_pca=log_params["LOG_EVERY_PCA"],
+                                   log_every_probe=log_params["LOG_EVERY_PROBE"])
     else:
         print("Training image iDBN...")
         imdbn.image_idbn.train(params["EPOCHS_IMG"],
-                               log_every_pca=params["LOG_EVERY_PCA"],
-                               log_every_probe=params["LOG_EVERY_PROBE"])
+                               log_every_pca=log_params["LOG_EVERY_PCA"],
+                               log_every_probe=log_params["LOG_EVERY_PROBE"])
 
     # (opzionale) fine-tuning ultimo RBM immagine
     ft_epochs = int(cfg.get("paths", {}).get("image_idbn_finetune_last_epochs", 0))
@@ -128,9 +142,9 @@ def main():
     # 2) Joint (autorecon first + condizionali via aux) + logging completo
     print("Training joint RBM...")
     imdbn.train_joint(epochs=params["EPOCHS_JOINT"],
-                      log_every=params["LOG_EVERY"],
-                      log_every_pca=params["LOG_EVERY_PCA"],
-                      log_every_probe=params["LOG_EVERY_PROBE"])
+                      log_every=log_params["LOG_EVERY"],
+                      log_every_pca=log_params["LOG_EVERY_PCA"],
+                      log_every_probe=log_params["LOG_EVERY_PROBE"])
 
     # Save
     save_dir = Path(cfg.get("paths", {}).get("save_dir", "./networks")).expanduser()
