@@ -38,7 +38,7 @@ def log_latent_trajectory_with_recon_panel(
     import matplotlib.pyplot as plt
     from sklearn.decomposition import PCA
 
-    from src.utils.probe_utils import compute_val_embeddings_and_features
+    from imdbn.utils.probe_utils import compute_val_embeddings_and_features
 
     assert model.val_loader is not None, "val_loader mancante"
 
@@ -260,7 +260,7 @@ def log_pca3_trajectory(model, sample_idx: int, steps: int = 40, tag: str = "pca
     import numpy as np
     import wandb
 
-    from src.utils.probe_utils import compute_val_embeddings_and_features
+    from imdbn.utils.probe_utils import compute_val_embeddings_and_features
 
     Z_val_t, _ = compute_val_embeddings_and_features(
         model.image_idbn, upto_layer=len(model.image_idbn.layers)
@@ -350,7 +350,7 @@ def log_pca3_trajectory_with_recon_panel(
     from sklearn.decomposition import PCA
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
-    from src.utils.probe_utils import compute_val_embeddings_and_features
+    from imdbn.utils.probe_utils import compute_val_embeddings_and_features
 
     # Config defaults
     cfg = getattr(model, "logging_cfg", {}) or {}

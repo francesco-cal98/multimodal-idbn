@@ -3,15 +3,14 @@ from pathlib import Path
 import argparse, sys, yaml, torch
 import wandb
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-SRC_ROOT = PROJECT_ROOT / 'src'
-for p in (PROJECT_ROOT, SRC_ROOT, SRC_ROOT / 'classes', SRC_ROOT / 'configs'):
-    if str(p) not in sys.path: sys.path.insert(0, str(p))
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-from src.classes.gdbn_model import iMDBN
-from src.datasets.uniform_dataset import create_dataloaders_uniform
+from imdbn.models.imdbn import iMDBN
+from imdbn.datasets.uniform_dataset import create_dataloaders_uniform
 
-DEFAULT_CONFIG_PATH = SRC_ROOT / "configs" / "multimodal_training_config.yaml"
+DEFAULT_CONFIG_PATH = PROJECT_ROOT / "configs" / "multimodal_training_config.yaml"
 
 
 def parse_args():
