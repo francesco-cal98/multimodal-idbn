@@ -3,8 +3,9 @@ iMDBN model components: RBM, iDBN, and iMDBN.
 """
 
 from .gdbn_model_complete import RBM, iDBN, iMDBN
+from .imdbn_bimodal import iMDBN_BiModal
 
-__all__ = ["RBM", "iDBN", "iMDBN"]
+__all__ = ["RBM", "iDBN", "iMDBN", "iMDBN_BiModal"]
 
 # Compatibility aliases for loading old pickled models from Groundeep
 # Old models were saved with src.classes.* module paths

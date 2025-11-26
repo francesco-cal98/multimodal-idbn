@@ -1,0 +1,143 @@
+dataset:
+  path: "/home/student/Desktop/Groundeep/stimuli_dataset_10_10"
+  name: "stimuli_dataset.npz"
+  batch_size: 128
+  num_workers: 1
+  multimodal_flag: true
+  second_modality: "mnist100"  # "labels" or "mnist100"
+  mnist100_path: "/home/student/Desktop/Groundeep/mnist100.npz"  # Path to MNIST-100 dataset
+
+model:
+  # Modality 1: Numerosity images (100x100 = 10000 pixels)
+  mod1_layers: [10000, 1500, 1500]
+
+  # Modality 2: MNIST-100 images (28x56 = 1568 pixels)
+  mod2_layers: [1568, 500, 500, 1000]
+
+  # Joint layer
+  joint_hidden: 2000
+
+training:
+  # Unimodali (shared for both DBNs)
+  learning_rate: 0.1
+  weight_penalty: 0.0001
+  init_momentum: 0.5
+  final_momentum: 0.95
+  learning_rate_dynamic: true
+  cd: 10
+  epochs_mod1: 100
+  epochs_mod2: 100
+
+  # Joint (semplice)
+  joint_learning_rate: 0.04
+  joint_cd: 5
+  epochs_joint: 150
+
+  # Cross-modality (sampling length)
+  cross_gibbs_steps: 50
+
+  # Aux clamped-CD (on/off)
+  use_aux: true
+  JOINT_AUX_COND_STEPS: 30
+  JOINT_AUX_EVERY_K: 15
+
+paths:
+  save_dir: "/home/student/Desktop/Groundeep/networks/uniform/bimodal"
+  save_name: "bimodal_trained"
+
+  # opzionale: DBN Modality 1 (numerosità) pre-allenata
+  mod1_pretrained: "/home/student/Desktop/Groundeep/networks/uniform/dataset_10_10/uniform_i_/dbn_trained_uniform_1500_1500.pkl"
+
+  # opzionale: DBN Modality 2 (MNIST-100) pre-allenata
+  mod2_pretrained: null
+
+  # opzionale: micro fine-tuning SOLO ultima RBM (0 = disattivo)
+  mod1_finetune_last_epochs: 0
+  mod2_finetune_last_epochs: 0
+
+wandb:
+  enable: true
+  project: "groundeep-bimodal"
+  entity: null
+  run_name: null
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# Customize which analyses and visualizations are performed during training
+# ============================================================================
+logging:
+  # Frequency settings (epochs)
+  log_every: 5
+  log_every_pca: 25
+  log_every_probe: 10
+  log_every_energy: 50
+  log_every_trajectory: 50
+  log_every_neighbors: 50
+  log_every_convergence: 25
+
+  # ---- BASIC METRICS ----
+  basic:
+    cd_loss: true
+    cross_modal_mse: true
+
+  # ---- SNAPSHOTS ----
+  snapshots:
+    enable: true
+    reconstruction_grid: true
+    num_samples: 8
+
+  # ---- PCA EMBEDDINGS ----
+  pca:
+    enable: true
+    plot_2d: true
+    plot_3d: true
+    compute_correlations: true
+
+  # ---- LINEAR PROBES ----
+  probes:
+    enable: true
+    n_bins: 5
+    test_size: 0.2
+    max_steps: 1000
+    lr: 0.01
+    patience: 20
+    save_csv: false
+    probe_cumulative_area: true
+    probe_convex_hull: true
+    probe_labels: true
+    probe_density: true
+
+  # ---- ENERGY DIAGNOSTICS ----
+  energy:
+    enable: false
+    track_free_energy: true
+    class_energies: true
+    fixed_case_tracking: true
+    num_fixed_cases: 4
+
+  # ---- LATENT TRAJECTORY ----
+  trajectory:
+    enable: true
+    plot_2d: true
+    plot_3d: true
+    num_samples: 4
+    panel_size: [6, 6]
+    colormap: "viridis"
+
+  # ---- NEAREST NEIGHBORS ----
+  neighbors:
+    enable: false
+    k: 5
+    similarity_metric: "cosine"
+    show_images: true
+    deduplicate: true
+
+  # ---- CROSS-MODAL CONVERGENCE ----
+  convergence:
+    enable: false
+    trace_mod1_to_mod2: true
+    trace_mod2_to_mod1: true
+    num_steps: 50
+    panel_analysis: true
+    z_mismatch_check: true
+    num_panel_samples: 16
