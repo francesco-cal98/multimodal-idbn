@@ -15,7 +15,7 @@ model:
   mod2_layers: [1568, 500, 500, 1000]
 
   # Joint layer
-  joint_hidden: 2000
+  joint_hidden: [1500, 500]
 
 training:
   # Unimodali (shared for both DBNs)

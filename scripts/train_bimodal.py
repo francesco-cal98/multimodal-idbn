@@ -119,10 +119,15 @@ def main():
         wandb.save(str(args.config))
 
     # Istanza modello bimodale
+    joint_hidden = model.get("joint_hidden", 500)
+    # Convert to list if it's a single integer
+    if isinstance(joint_hidden, int):
+        joint_hidden = [joint_hidden]
+
     bimodal = iMDBN_BiModal(
         layer_sizes_mod1=model.get("mod1_layers", [10000, 1500, 500]),
         layer_sizes_mod2=model.get("mod2_layers", [1568, 500, 500]),
-        joint_layer_size=model.get("joint_hidden", 500),
+        joint_layer_sizes=joint_hidden,  # Now accepts a list
         params=params,
         dataloader=train_loader,
         val_loader=val_loader,

@@ -50,8 +50,11 @@ def compute_bimodal_joint_embeddings_and_features(model):
 
         z1 = model.mod1_dbn.represent(v1)
         z2 = model.mod2_dbn.represent(v2)
-        v = torch.cat([z1, z2], dim=1)
-        h = model.joint_rbm.forward(v)
+
+        # Pass through all joint layers
+        h = torch.cat([z1, z2], dim=1)
+        for rbm in model.joint_layers:
+            h = rbm.forward(h)
         all_embeddings.append(h.cpu())
 
     E = torch.cat(all_embeddings, dim=0)
@@ -435,7 +438,7 @@ class iMDBN_BiModal(nn.Module):
         self,
         layer_sizes_mod1: list,
         layer_sizes_mod2: list,
-        joint_layer_size: int,
+        joint_layer_sizes: list,
         params: Optional[dict] = None,
         dataloader=None,
         val_loader=None,
@@ -449,7 +452,7 @@ class iMDBN_BiModal(nn.Module):
         Args:
             layer_sizes_mod1: Modality 1 (numerosity) DBN layers, e.g., [10000, 1500, 500]
             layer_sizes_mod2: Modality 2 (MNIST-100) DBN layers, e.g., [1568, 500, 500]
-            joint_layer_size: Joint RBM hidden layer size
+            joint_layer_sizes: Joint DBN hidden layer sizes, e.g., [1500] or [1500, 1500]
             params: Training hyperparameters
             dataloader: Training DataLoader yielding (mod1_images, mod2_images)
             val_loader: Validation DataLoader
@@ -490,8 +493,8 @@ class iMDBN_BiModal(nn.Module):
         self.Dz_mod1 = int(self.mod1_dbn.layers[-1].num_hidden)
         self.Dz_mod2 = int(self.mod2_dbn.layers[-1].num_hidden)
 
-        # Build joint RBM
-        self._build_joint(joint_layer_size)
+        # Build joint DBN (can be multi-layer)
+        self._build_joint(joint_layer_sizes)
 
         # Training hyperparameters
         self.joint_cd = int(self.params.get("JOINT_CD", self.params.get("CD", 1)))
@@ -533,22 +536,43 @@ class iMDBN_BiModal(nn.Module):
         except Exception as e:
             print(f"[iMDBN_BiModal] Warning: Could not extract features for probes: {e}")
 
-        self.arch_str = f"MOD1{'-'.join(map(str, layer_sizes_mod1))}_MOD2{'-'.join(map(str, layer_sizes_mod2))}_JOINT{joint_layer_size}"
+        # Build architecture string (handle both int and list for joint_layer_sizes)
+        joint_sizes_for_str = joint_layer_sizes if isinstance(joint_layer_sizes, list) else [joint_layer_sizes]
+        self.arch_str = f"MOD1{'-'.join(map(str, layer_sizes_mod1))}_MOD2{'-'.join(map(str, layer_sizes_mod2))}_JOINT{'-'.join(map(str, joint_sizes_for_str))}"
 
-    def _build_joint(self, joint_hidden: int):
-        """Build joint RBM connecting both modality latents."""
+    def _build_joint(self, joint_layer_sizes: list):
+        """
+        Build joint DBN connecting both modality latents.
+
+        Args:
+            joint_layer_sizes: List of hidden layer sizes, e.g., [1500] or [1500, 1500]
+        """
+        # Convert to list if single integer was passed
+        if isinstance(joint_layer_sizes, int):
+            joint_layer_sizes = [joint_layer_sizes]
+
         total_visible = self.Dz_mod1 + self.Dz_mod2
+        self.joint_layers = []
 
-        self.joint_rbm = RBM(
-            num_visible=total_visible,
-            num_hidden=int(joint_hidden),
-            learning_rate=self.params.get("JOINT_LEARNING_RATE", self.params.get("LEARNING_RATE", 0.1)),
-            weight_decay=self.params.get("WEIGHT_PENALTY", 0.0001),
-            momentum=self.params.get("INIT_MOMENTUM", 0.5),
-            dynamic_lr=self.params.get("LEARNING_RATE_DYNAMIC", True),
-            final_momentum=self.params.get("FINAL_MOMENTUM", 0.95),
-            softmax_groups=[],  # No softmax for image-image
-        ).to(self.device)
+        # Build RBM stack for joint DBN
+        current_visible = total_visible
+        for i, hidden_size in enumerate(joint_layer_sizes):
+            rbm = RBM(
+                num_visible=current_visible,
+                num_hidden=int(hidden_size),
+                learning_rate=self.params.get("JOINT_LEARNING_RATE", self.params.get("LEARNING_RATE", 0.1)),
+                weight_decay=self.params.get("WEIGHT_PENALTY", 0.0001),
+                momentum=self.params.get("INIT_MOMENTUM", 0.5),
+                dynamic_lr=self.params.get("LEARNING_RATE_DYNAMIC", True),
+                final_momentum=self.params.get("FINAL_MOMENTUM", 0.95),
+                softmax_groups=[],  # No softmax for image-image
+            ).to(self.device)
+            self.joint_layers.append(rbm)
+            current_visible = int(hidden_size)
+
+        # Keep backward compatibility: joint_rbm points to the first layer
+        self.joint_rbm = self.joint_layers[0]
+        self.num_joint_layers = len(self.joint_layers)
 
     def load_pretrained_mod1_dbn(self, path: str) -> bool:
         """Load pretrained Modality 1 (numerosity) DBN."""
@@ -591,7 +615,7 @@ class iMDBN_BiModal(nn.Module):
 
     @torch.no_grad()
     def init_joint_bias_from_data(self, n_batches: int = 10):
-        """Initialize joint RBM biases from data statistics."""
+        """Initialize joint DBN biases from data statistics (first layer only)."""
         sum_z1 = None
         sum_z2 = None
         n = 0
@@ -616,9 +640,9 @@ class iMDBN_BiModal(nn.Module):
         mean_z1 = (sum_z1 / n).clamp(1e-4, 1 - 1e-4)
         mean_z2 = (sum_z2 / n).clamp(1e-4, 1 - 1e-4)
 
-        # Set biases
-        self.joint_rbm.vis_bias[:self.Dz_mod1] = torch.log(mean_z1) - torch.log1p(-mean_z1)
-        self.joint_rbm.vis_bias[self.Dz_mod1:] = torch.log(mean_z2) - torch.log1p(-mean_z2)
+        # Set biases for the first joint layer
+        self.joint_layers[0].vis_bias[:self.Dz_mod1] = torch.log(mean_z1) - torch.log1p(-mean_z1)
+        self.joint_layers[0].vis_bias[self.Dz_mod1:] = torch.log(mean_z2) - torch.log1p(-mean_z2)
 
     @torch.no_grad()
     def _cross_reconstruct(
@@ -670,7 +694,7 @@ class iMDBN_BiModal(nn.Module):
 
     @torch.no_grad()
     def represent(self, batch: Tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
-        """Compute joint representation from both modalities."""
+        """Compute joint representation from both modalities through all joint layers."""
         mod1_data, mod2_data = batch
         v1 = mod1_data.to(self.device).view(mod1_data.size(0), -1).float()
         v2 = mod2_data.to(self.device).view(mod2_data.size(0), -1).float()
@@ -678,8 +702,11 @@ class iMDBN_BiModal(nn.Module):
         z1 = self.mod1_dbn.represent(v1)
         z2 = self.mod2_dbn.represent(v2)
 
-        v = torch.cat([z1, z2], dim=1)
-        return self.joint_rbm.forward(v)
+        # Pass through all joint layers
+        h = torch.cat([z1, z2], dim=1)
+        for rbm in self.joint_layers:
+            h = rbm.forward(h)
+        return h
 
     def train_joint(
         self,
@@ -690,18 +717,18 @@ class iMDBN_BiModal(nn.Module):
         log_every_trajectory: int = 50,
     ):
         """
-        Train joint RBM connecting both modalities.
+        Train joint DBN connecting both modalities with iterative training of all layers.
 
         Training strategy:
-        - Warmup (first 8 epochs): Alternating modality clamping
-        - Main (remaining epochs): Free CD + auxiliary clamped training
+        - Warmup (first 8 epochs): Alternating modality clamping (first layer only)
+        - Main (remaining epochs): Free CD + auxiliary clamped training (all layers)
 
         Logged metrics:
         - Cross-modal: MSE for both modalities
         - Embeddings: PCA projections of joint latents
         - Linear probes: Downstream task performance
         """
-        print("[iMDBN_BiModal] joint training (with warmup)")
+        print(f"[iMDBN_BiModal] joint training: {self.num_joint_layers} layers, {epochs} epochs total")
         self.init_joint_bias_from_data(n_batches=10)
 
         WARMUP_EPOCHS = 8
@@ -724,14 +751,14 @@ class iMDBN_BiModal(nn.Module):
                     v_plus = torch.cat([z1, z2], dim=1)
 
                 if epoch < WARMUP_EPOCHS:
-                    # Warmup: alternating modality clamping, 2x per batch
+                    # Warmup: alternating modality clamping, 2x per batch (first layer only)
                     for _ in range(2):
                         # Clamp mod1
                         v_known = torch.zeros(B, V, device=self.device)
                         km = torch.zeros(B, V, device=self.device)
                         v_known[:, :Dz1] = z1
                         km[:, :Dz1] = 1.0
-                        self.joint_rbm.train_epoch_clamped(
+                        self.joint_layers[0].train_epoch_clamped(
                             v_known, km, epoch, epochs,
                             CD=3, cond_init_steps=aux_cond_steps,
                             sample_h=True, sample_v=False,
@@ -744,7 +771,7 @@ class iMDBN_BiModal(nn.Module):
                         km.zero_()
                         v_known[:, Dz1:] = z2
                         km[:, Dz1:] = 1.0
-                        self.joint_rbm.train_epoch_clamped(
+                        self.joint_layers[0].train_epoch_clamped(
                             v_known, km, epoch, epochs,
                             CD=3, cond_init_steps=aux_cond_steps,
                             sample_h=True, sample_v=False,
@@ -752,16 +779,24 @@ class iMDBN_BiModal(nn.Module):
                             use_noisy_init=True,
                         )
                 else:
-                    # Main training: free CD + auxiliary objectives
-                    loss_cd = self.joint_rbm.train_epoch(v_plus, epoch, epochs, CD=self.joint_cd)
-                    cd_losses.append(float(loss_cd))
+                    # Main training: train all layers iteratively
+                    # Layer 0: train with concatenated latents
+                    current_input = v_plus
+                    for layer_idx, rbm in enumerate(self.joint_layers):
+                        loss_cd = rbm.train_epoch(current_input, epoch, epochs, CD=self.joint_cd)
+                        if layer_idx == 0:
+                            cd_losses.append(float(loss_cd))
 
-                    # Auxiliary clamped training - Modality 1
+                        # Get output for next layer (with no_grad since we're going layer by layer)
+                        with torch.no_grad():
+                            current_input = rbm.forward(current_input)
+
+                    # Auxiliary clamped training - Modality 1 (first layer only)
                     v_known = torch.zeros(B, V, device=self.device)
                     km = torch.zeros(B, V, device=self.device)
                     v_known[:, :Dz1] = z1
                     km[:, :Dz1] = 1.0
-                    self.joint_rbm.train_epoch_clamped(
+                    self.joint_layers[0].train_epoch_clamped(
                         v_known, km, epoch, epochs,
                         CD=3, cond_init_steps=aux_cond_steps,
                         sample_h=True, sample_v=False,
@@ -770,12 +805,12 @@ class iMDBN_BiModal(nn.Module):
                         use_noisy_init=True,
                     )
 
-                    # Auxiliary clamped training - Modality 2 (balanced with mod1)
+                    # Auxiliary clamped training - Modality 2 (first layer only)
                     v_known.zero_()
                     km.zero_()
                     v_known[:, Dz1:] = z2
                     km[:, Dz1:] = 1.0
-                    self.joint_rbm.train_epoch_clamped(
+                    self.joint_layers[0].train_epoch_clamped(
                         v_known, km, epoch, epochs,
                         CD=3, cond_init_steps=aux_cond_steps,
                         sample_h=True, sample_v=False,
@@ -986,7 +1021,8 @@ class iMDBN_BiModal(nn.Module):
         payload = {
             "mod1_dbn": self.mod1_dbn,
             "mod2_dbn": self.mod2_dbn,
-            "joint_rbm": self.joint_rbm,
+            "joint_layers": self.joint_layers,  # Save all joint layers
+            "num_joint_layers": self.num_joint_layers,
             "Dz_mod1": self.Dz_mod1,
             "Dz_mod2": self.Dz_mod2,
             "params": self.params,
@@ -1023,8 +1059,15 @@ class iMDBN_BiModal(nn.Module):
             for rbm in payload["mod2_dbn"].layers:
                 rbm.to(device)
 
-        if "joint_rbm" in payload:
+        # Support both old (single joint_rbm) and new (joint_layers) formats
+        if "joint_layers" in payload:
+            for rbm in payload["joint_layers"]:
+                rbm.to(device)
+        elif "joint_rbm" in payload:
+            # Backward compatibility: convert single RBM to list
             payload["joint_rbm"].to(device)
+            payload["joint_layers"] = [payload["joint_rbm"]]
+            payload["num_joint_layers"] = 1
 
         print(f"[iMDBN_BiModal] Model loaded from {path}")
         if "arch_str" in payload:
